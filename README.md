@@ -2,15 +2,16 @@
 
 Kluriga matteuppgifter för årskurs 4–7 i olympiadstil, på svenska och engelska.
 
-- **Föräldrakonto** (e-post + lösenord) med valfritt antal **barnprofiler**
+- **Samma konton som cyberdyne.se**: barnen loggar in med namn och lösenord, ingen e-post behövs
+- **Vuxen/lärare** loggar in med cyberdynes lärarlösenord: statistik för alla elever och möjlighet att sätta nytt lösenord åt den som glömt
 - **Quiz** med 10 uppgifter: blandat, per område eller "träna på det svåra" (viktat mot uppgifter barnet ofta svarar fel på)
 - Direkt rätt/fel med **förklaring** efter varje svar
-- **Statistik** per barn: andel rätt per område, aktivitet per dag, senaste quizen
+- **Statistik** för varje barn (egen vy) och för alla (lärarvyn)
 - 39 uppgiftsgeneratorer som skapar nya varianter varje gång. Svaren räknas fram i koden och testas automatiskt.
 
 ## Teknik
 
-Ren HTML/CSS/JS utan byggsteg, hostas på GitHub Pages. Data i Supabase (tabeller `matte_children`, `matte_sessions`, `matte_answers` med Row Level Security, så att varje förälder bara ser sina egna barn).
+Ren HTML/CSS/JS utan byggsteg, hostas på GitHub Pages. Data i Supabase, i samma projekt som cyberdyne.se. Tabellerna `matte_sessions` och `matte_answers` kopplas till `konton` och kan bara nås via databasfunktionerna `matte_start`, `matte_answer`, `matte_finish`, `matte_me` och `matte_teacher_stats`, som kontrollerar inloggningstoken. Inloggningen använder cyberdynes `register_player`, `login_player`, `teacher_login` och `teacher_reset_password`.
 
 | Fil | Innehåll |
 |---|---|
@@ -27,9 +28,3 @@ Ren HTML/CSS/JS utan byggsteg, hostas på GitHub Pages. Data i Supabase (tabelle
 python3 -m http.server 8000
 # öppna http://localhost:8000
 ```
-
-## Supabase-inställningar
-
-Under **Authentication → URL Configuration** i Supabase måste sidans adress
-(t.ex. `https://jtingstrom.github.io/matte/`) finnas under *Redirect URLs*.
-Annars fungerar inte länkarna i bekräftelse- och återställningsmejlen.

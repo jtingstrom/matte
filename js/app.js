@@ -3,7 +3,8 @@ import { SUPABASE_URL, SUPABASE_KEY, QUIZ_LENGTH } from './config.js';
 import { STRINGS } from './i18n.js';
 import { TOPICS, topicsFor, makeQuiz, optionText, generatorsFor } from './questions.js';
 
-const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+// Inloggning sker med cyberdynes konton (namn + lösenord) via databasfunktioner, inte Supabase Auth.
+const sb = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
 const AVATARS = ['🦊', '🐼', '🐯', '🦁', '🐸', '🐙', '🦄', '🐲', '🐧', '🦉', '🐬', '🚀', '⚽', '🎸', '🌟', '🤖'];
@@ -11,23 +12,31 @@ const LETTER_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6'];
 
 // ---------- tillstånd ----------
 const store = {
-  get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  get(k, d = null) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* ignorera */ } },
+  del(k) { try { localStorage.removeItem(k); } catch { /* ignorera */ } },
 };
 const state = {
   lang: store.get('matte.lang', (navigator.language || 'sv').startsWith('sv') ? 'sv' : 'en'),
-  user: null,
-  children: [],
-  child: null,
+  token: store.get('matte.token'),
+  teacher: store.get('matte.teacher'),
+  me: null,
   level: null,
   quiz: null,
-  recovery: false,
 };
 const t = (k, ...a) => { const v = STRINGS[state.lang][k]; return typeof v === 'function' ? v(...a) : v; };
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const h = (html) => { app.innerHTML = html; window.scrollTo(0, 0); };
 const $ = (sel) => app.querySelector(sel);
-const redirectUrl = () => location.origin + location.pathname;
+const errText = (e) => { const m = String(e?.message || e || ''); const code = Object.keys(STRINGS.sv.errors).find((k) => m.includes(k)); return code ? t('errors')[code] : m; };
+const isLoggedOutErr = (e) => String(e?.message || '').includes('not_logged_in');
+const avatarFor = (me) => store.get(`matte.avatar.${me.id}`) || AVATARS[[...me.name].reduce((s, c) => s + c.charCodeAt(0), 0) % AVATARS.length];
+
+async function rpc(fn, args) {
+  const { data, error } = await sb.rpc(fn, args);
+  if (error) throw error;
+  return data;
+}
 
 function setLang(l) {
   state.lang = l;
@@ -37,190 +46,127 @@ function setLang(l) {
   document.getElementById('brandName').textContent = t('appName');
   document.title = t('appName');
 }
-
-document.getElementById('langBtn').onclick = () => { setLang(state.lang === 'sv' ? 'en' : 'sv'); rerender(); };
+document.getElementById('langBtn').onclick = () => { setLang(state.lang === 'sv' ? 'en' : 'sv'); current(); };
 document.getElementById('brand').onclick = (e) => { e.preventDefault(); if (!state.quiz) route(); };
 
 let current = () => {};
-function rerender() { current(); }
-
+const navActions = {};
 function setNav(items) {
   nav.innerHTML = items.map(([label, id]) => `<button class="navbtn" data-nav="${id}">${label}</button>`).join('');
   nav.querySelectorAll('[data-nav]').forEach((b) => (b.onclick = () => navActions[b.dataset.nav]()));
 }
-const navActions = {
-  profiles: () => { state.child = null; route(); },
-  stats: () => showStats(state.child?.id || state.children[0]?.id),
-  logout: async () => { await sb.auth.signOut(); },
+navActions.home = () => route();
+navActions.mystats = () => showMyStats();
+navActions.logout = async () => {
+  if (state.token) sb.rpc('logout_player', { p_token: state.token }).then(() => {}, () => {});
+  state.token = null; state.me = null; store.del('matte.token');
+  showAuth();
 };
-const parentNav = () => setNav([[t('profiles'), 'profiles'], [t('stats'), 'stats'], [t('logout'), 'logout']]);
+navActions.teacherLogout = () => { state.teacher = null; store.del('matte.teacher'); showAuth('teacher'); };
+const kidNav = () => setNav([[t('myStats'), 'mystats'], [t('logout'), 'logout']]);
 
 function showError(e) {
   console.error(e);
   const el = document.createElement('div');
   el.className = 'notice err';
   el.style.marginBottom = '14px';
-  el.textContent = `${t('error')} ${e?.message || e}`;
+  el.textContent = errText(e);
   app.prepend(el);
 }
 
 // ---------- routing ----------
 async function route() {
-  if (state.recovery) return showRecovery();
-  if (!state.user) return showAuth();
-  if (!state.child) return showProfiles();
-  return showChildHome();
+  if (!state.token) return showAuth(state.teacher ? 'teacher' : 'login');
+  if (!state.me) {
+    h(`<div class="spin">${t('loading')}</div>`);
+    try { await loadMe(); } catch (e) {
+      if (isLoggedOutErr(e)) { state.token = null; store.del('matte.token'); return showAuth('login', { type: 'err', text: errText(e) }); }
+      h(''); return showError(e);
+    }
+  }
+  showHome();
 }
 
-sb.auth.onAuthStateChange((event, session) => {
-  const prev = state.user?.id;
-  state.user = session?.user || null;
-  if (event === 'PASSWORD_RECOVERY') state.recovery = true;
-  if (event === 'SIGNED_OUT') { state.children = []; state.child = null; state.quiz = null; }
-  if (event === 'INITIAL_SESSION' || event === 'SIGNED_OUT' || event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && prev !== state.user?.id)) {
-    setTimeout(route, 0);
+async function loadMe() {
+  state.me = await rpc('matte_me', { p_token: state.token });
+  if (!state.level) {
+    const saved = Number(store.get(`matte.level.${state.me.id}`));
+    state.level = state.me.last_grade || (saved >= 4 && saved <= 7 ? saved : Math.min(7, Math.max(4, state.me.grade)));
   }
-});
+  return state.me;
+}
 
 // ---------- inloggning ----------
 function showAuth(tab = 'login', msg = null) {
   current = () => showAuth(tab, msg);
+  if (tab === 'teacher' && state.teacher) return showTeacher();
   setNav([]);
-  const forgot = tab === 'forgot';
+  let grade = 4;
+  const field = (id, label, type, extra = '') => `<div><label for="${id}">${label}</label><input id="${id}" type="${type}" ${extra} required></div>`;
   h(`<div class="hero"><h1>${t('appName')}</h1><p class="muted">${t('tagline')}</p></div>
   <div class="card center">
-    ${forgot ? '' : `<div class="tabs"><button data-tab="login" class="${tab === 'login' ? 'on' : ''}">${t('login')}</button><button data-tab="register" class="${tab === 'register' ? 'on' : ''}">${t('register')}</button></div>`}
+    <div class="tabs">
+      <button data-tab="login" class="${tab === 'login' ? 'on' : ''}">${t('login')}</button>
+      <button data-tab="register" class="${tab === 'register' ? 'on' : ''}">${t('register')}</button>
+    </div>
     <form class="stack" id="authForm">
       ${msg ? `<div class="notice ${msg.type}">${esc(msg.text)}</div>` : ''}
-      <div><label for="email">${t('email')}</label><input id="email" type="email" autocomplete="email" required></div>
-      ${forgot ? '' : `<div><label for="pw">${t('password')}</label><input id="pw" type="password" minlength="6" autocomplete="${tab === 'register' ? 'new-password' : 'current-password'}" required></div>`}
-      <button class="btn big" style="width:100%" type="submit">${forgot ? t('sendReset') : tab === 'login' ? t('login') : t('register')}</button>
-      <div class="row small">
-        ${forgot ? `<button type="button" class="linkbtn" data-tab="login">${t('back')}</button>` : tab === 'login' ? `<button type="button" class="linkbtn" data-tab="forgot">${t('forgot')}</button>` : `<span class="muted">${t('parentNote')}</span>`}
-      </div>
+      ${tab === 'teacher'
+        ? `<h3>👩‍🏫 ${t('teacher')}</h3>${field('pw', t('teacherPassword'), 'password', 'autocomplete="current-password"')}<p class="muted small">${t('teacherHint')}</p>`
+        : `${field('nm', t('name'), 'text', `autocomplete="username" maxlength="16" minlength="2" ${tab === 'register' ? `title="${t('nameRules')}"` : ''}`)}
+           ${field('pw', t('password'), 'password', `minlength="4" maxlength="64" autocomplete="${tab === 'register' ? 'new-password' : 'current-password'}"`)}
+           ${tab === 'register' ? `<div><label>${t('grade')}</label><div class="chips" id="grades">${[4, 5, 6, 7].map((g) => `<button type="button" class="chip ${g === grade ? 'on' : ''}" data-g="${g}">${g}</button>`).join('')}</div></div>` : ''}`}
+      <button class="btn big" style="width:100%" type="submit">${tab === 'register' ? t('register') : t('login')}</button>
+      ${tab === 'teacher' ? '' : `<p class="muted small">${t('sameAccount')}${tab === 'login' ? ' ' + t('forgotHint') : ''}</p>`}
     </form>
-  </div>`);
+  </div>
+  <p style="text-align:center"><button class="linkbtn" data-tab="${tab === 'teacher' ? 'login' : 'teacher'}">${tab === 'teacher' ? '← ' + t('login') : '👩‍🏫 ' + t('teacher')}</button></p>`);
   app.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => showAuth(b.dataset.tab)));
+  app.querySelectorAll('#grades button').forEach((b) => (b.onclick = () => {
+    grade = Number(b.dataset.g);
+    app.querySelectorAll('#grades button').forEach((x) => x.classList.toggle('on', x === b));
+  }));
   $('#authForm').onsubmit = async (e) => {
     e.preventDefault();
-    const btn = e.submitter; btn.disabled = true;
-    const email = $('#email').value.trim(), pw = $('#pw')?.value;
+    const btn = e.submitter; if (btn) btn.disabled = true;
+    const pw = $('#pw').value;
     try {
-      if (forgot) {
-        const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl() });
-        if (error) throw error;
-        showAuth('login', { type: 'ok', text: t('resetSent') });
-      } else if (tab === 'register') {
-        const { data, error } = await sb.auth.signUp({ email, password: pw, options: { emailRedirectTo: redirectUrl() } });
-        if (error) throw error;
-        if (!data.session) showAuth('login', { type: 'ok', text: t('confirmSent') });
-      } else {
-        const { error } = await sb.auth.signInWithPassword({ email, password: pw });
-        if (error) throw error;
+      if (tab === 'teacher') {
+        const res = await rpc('teacher_login', { p_password: pw });
+        if (res?.error) throw new Error(res.error);
+        state.teacher = res.token; store.set('matte.teacher', res.token);
+        return showTeacher();
       }
+      const name = $('#nm').value.trim();
+      if (tab === 'register') {
+        // cyberdyne-kontot sparar åk 3–6; mattenivån sparas separat
+        const rows = await rpc('register_player', { p_name: name, p_password: pw, p_grade: Math.min(grade, 6) });
+        state.token = rows[0].r_token;
+        state.level = grade;
+        store.set(`matte.level.${rows[0].r_id}`, grade);
+      } else {
+        const rows = await rpc('login_player', { p_name: name, p_password: pw });
+        if (rows[0]?.r_error) throw new Error(rows[0].r_error);
+        state.token = rows[0].r_token;
+        state.level = null;
+      }
+      store.set('matte.token', state.token);
+      state.me = null;
+      route();
     } catch (err) {
-      showAuth(tab, { type: 'err', text: err.message });
+      showAuth(tab, { type: 'err', text: errText(err) });
     }
   };
 }
 
-function showRecovery(msg = null) {
-  current = () => showRecovery(msg);
-  setNav([]);
-  h(`<div class="card center"><h2>${t('newPassword')}</h2>
-    <form class="stack" id="recForm">${msg ? `<div class="notice ${msg.type}">${esc(msg.text)}</div>` : ''}
-      <div><label for="pw">${t('newPassword')}</label><input id="pw" type="password" minlength="6" autocomplete="new-password" required></div>
-      <button class="btn big" type="submit">${t('savePassword')}</button></form></div>`);
-  $('#recForm').onsubmit = async (e) => {
-    e.preventDefault();
-    const { error } = await sb.auth.updateUser({ password: $('#pw').value });
-    if (error) return showRecovery({ type: 'err', text: error.message });
-    state.recovery = false;
-    history.replaceState(null, '', redirectUrl());
-    route();
-  };
-}
-
-// ---------- profiler ----------
-async function loadChildren() {
-  const { data, error } = await sb.from('matte_children').select('*').order('created_at');
-  if (error) throw error;
-  state.children = data;
-  return data;
-}
-
-async function showProfiles() {
-  current = showProfiles;
-  parentNav();
-  h(`<div class="spin">${t('loading')}</div>`);
-  try { await loadChildren(); } catch (e) { h(''); return showError(e); }
-  h(`<div class="hero"><h1>${t('whoPlays')}</h1>${state.children.length ? '' : `<p class="muted">${t('noChildren')}</p>`}</div>
-    <div class="kids">
-      ${state.children.map((c) => `<div class="kid" role="button" tabindex="0" data-id="${c.id}">
-        <button class="edit" data-edit="${c.id}" aria-label="${t('editChild')}">✏️</button>
-        <span class="av">${esc(c.avatar)}</span><span class="nm">${esc(c.name)}</span><span class="gr">${t('gradeN', c.grade)}</span></div>`).join('')}
-      <button class="kid add" id="addKid"><span class="av">➕</span><span class="nm">${t('addChild')}</span></button>
-    </div>`);
-  app.querySelectorAll('.kid[data-id]').forEach((el) => {
-    const pick = () => selectChild(el.dataset.id);
-    el.onclick = (e) => { if (!e.target.closest('[data-edit]')) pick(); };
-    el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
-  });
-  app.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => showChildForm(state.children.find((c) => c.id === b.dataset.edit))));
-  $('#addKid').onclick = () => showChildForm(null);
-}
-
-function selectChild(id) {
-  state.child = state.children.find((c) => c.id === id);
-  state.level = state.child.grade;
-  if (state.child.lang !== state.lang) setLang(state.child.lang);
-  route();
-}
-
-function showChildForm(child) {
-  current = () => showChildForm(child);
-  parentNav();
-  const f = { name: child?.name || '', grade: child?.grade || 4, avatar: child?.avatar || AVATARS[Math.floor(Math.random() * AVATARS.length)], lang: child?.lang || state.lang };
-  h(`<div class="card center"><h2>${child ? t('editChild') : t('addChild')}</h2>
-    <form class="stack" id="kidForm">
-      <div><label for="nm">${t('name')}</label><input id="nm" maxlength="40" required value="${esc(f.name)}"></div>
-      <div><label>${t('grade')}</label><div class="chips" id="grades">${[4, 5, 6, 7].map((g) => `<button type="button" class="chip ${g === f.grade ? 'on' : ''}" data-g="${g}">${g}</button>`).join('')}</div></div>
-      <div><label>${t('avatar')}</label><div class="avatars" id="avs">${AVATARS.map((a) => `<button type="button" class="${a === f.avatar ? 'on' : ''}" data-a="${a}">${a}</button>`).join('')}</div></div>
-      <div><label>${t('language')}</label><div class="chips" id="langs"><button type="button" class="chip ${f.lang === 'sv' ? 'on' : ''}" data-l="sv">Svenska</button><button type="button" class="chip ${f.lang === 'en' ? 'on' : ''}" data-l="en">English</button></div></div>
-      <div class="row"><button class="btn green" type="submit">${t('save')}</button><button class="btn secondary" type="button" id="cancel">${t('cancel')}</button>
-      <span class="spacer"></span>${child ? `<button class="btn danger" type="button" id="del">${t('delete')}</button>` : ''}</div>
-    </form></div>`);
-  const sel = (wrap, attr, key, conv = (x) => x) => app.querySelectorAll(`#${wrap} button`).forEach((b) => (b.onclick = () => {
-    f[key] = conv(b.dataset[attr]);
-    app.querySelectorAll(`#${wrap} button`).forEach((x) => x.classList.toggle('on', x === b));
-  }));
-  sel('grades', 'g', 'grade', Number); sel('avs', 'a', 'avatar'); sel('langs', 'l', 'lang');
-  $('#cancel').onclick = () => route();
-  if (child) $('#del').onclick = async () => {
-    if (!confirm(t('confirmDelete', child.name))) return;
-    const { error } = await sb.from('matte_children').delete().eq('id', child.id);
-    if (error) return showError(error);
-    route();
-  };
-  $('#kidForm').onsubmit = async (e) => {
-    e.preventDefault();
-    const row = { name: $('#nm').value.trim(), grade: f.grade, avatar: f.avatar, lang: f.lang };
-    if (!row.name) return;
-    const q = child ? sb.from('matte_children').update(row).eq('id', child.id) : sb.from('matte_children').insert(row);
-    const { error } = await q;
-    if (error) return showError(error);
-    state.child = null;
-    route();
-  };
-}
-
 // ---------- barnets startsida ----------
-function showChildHome() {
-  current = showChildHome;
-  setNav([[t('profiles'), 'profiles'], [t('stats'), 'stats']]);
-  const c = state.child, g = state.level;
+function showHome() {
+  current = showHome;
+  kidNav();
+  const me = state.me, g = state.level;
   const topics = topicsFor(g);
-  h(`<div class="welcome"><span class="av">${esc(c.avatar)}</span><div><h1>${t('hi', esc(c.name))}</h1><span id="streak" class="muted"></span></div>
+  h(`<div class="welcome"><button class="av avbtn" id="av" title="${t('changeAvatar')}">${avatarFor(me)}</button>
+      <div><h1>${t('hi', esc(me.name))}</h1><span id="streak" class="muted"></span></div>
       <span class="spacer"></span><div><label>${t('level')}</label><div class="chips" id="lvl">${[4, 5, 6, 7].map((x) => `<button class="chip ${x === g ? 'on' : ''}" data-g="${x}">${x}</button>`).join('')}</div></div></div>
     <div class="modes">
       <button class="mode" style="background:var(--blue)" id="mixed"><span class="ic">🎯</span><b>${t('mixed')}</b><span>${t('mixedDesc', QUIZ_LENGTH)}</span></button>
@@ -228,28 +174,32 @@ function showChildHome() {
     </div>
     <h2>${t('topicTitle')}</h2>
     <div class="topics">${topics.map((k) => `<button class="topic" data-topic="${k}"><span class="ic">${TOPICS[k].icon}</span>${TOPICS[k][state.lang]}</button>`).join('')}</div>`);
-  app.querySelectorAll('#lvl button').forEach((b) => (b.onclick = () => { state.level = Number(b.dataset.g); showChildHome(); }));
+  $('#av').onclick = () => {
+    const i = (AVATARS.indexOf(avatarFor(me)) + 1) % AVATARS.length;
+    store.set(`matte.avatar.${me.id}`, AVATARS[i]);
+    $('#av').textContent = AVATARS[i];
+  };
+  app.querySelectorAll('#lvl button').forEach((b) => (b.onclick = () => { state.level = Number(b.dataset.g); store.set(`matte.level.${me.id}`, state.level); showHome(); }));
   $('#mixed').onclick = () => startQuiz('quiz');
   $('#weak').onclick = () => startQuiz('weak');
   app.querySelectorAll('[data-topic]').forEach((b) => (b.onclick = () => startQuiz('topic', b.dataset.topic)));
-  loadStreak();
+  const n = streak(me.days, me.today);
+  if (n > 0) $('#streak').textContent = t('streak', n);
 }
 
-async function loadStreak() {
-  const { data } = await sb.from('matte_answers').select('created_at').eq('child_id', state.child.id).order('created_at', { ascending: false }).limit(1000);
-  if (!data?.length) return;
-  const days = new Set(data.map((a) => new Date(a.created_at).toLocaleDateString('sv-SE')));
-  let n = 0; const d = new Date();
-  if (!days.has(d.toLocaleDateString('sv-SE'))) d.setDate(d.getDate() - 1);
-  while (days.has(d.toLocaleDateString('sv-SE'))) { n++; d.setDate(d.getDate() - 1); }
-  const el = document.getElementById('streak');
-  if (el && n > 0) el.textContent = t('streak', n);
+function streak(days, today) {
+  const set = new Set((days || []).map((d) => d.day));
+  const d = new Date(today + 'T12:00:00Z');
+  const key = () => d.toISOString().slice(0, 10);
+  if (!set.has(key())) d.setUTCDate(d.getUTCDate() - 1);
+  let n = 0;
+  while (set.has(key())) { n++; d.setUTCDate(d.getUTCDate() - 1); }
+  return n;
 }
 
-async function weakWeights(grade) {
-  const { data } = await sb.from('matte_answers').select('gen_id, correct').eq('child_id', state.child.id).eq('grade', grade).order('created_at', { ascending: false }).limit(800);
+function weakWeights(grade) {
   const agg = {};
-  for (const a of data || []) { const x = (agg[a.gen_id] ||= { n: 0, w: 0 }); x.n++; if (!a.correct) x.w++; }
+  for (const x of state.me?.gens || []) if (x.grade === grade) agg[x.gen_id] = x;
   const weights = {};
   for (const gn of generatorsFor(grade)) {
     const x = agg[gn.id];
@@ -262,18 +212,20 @@ async function weakWeights(grade) {
 async function startQuiz(mode, topic = null) {
   const grade = state.level;
   h(`<div class="spin">${t('loading')}</div>`);
-  let weights = null;
-  if (mode === 'weak') { try { weights = await weakWeights(grade); } catch { weights = null; } }
-  const questions = makeQuiz(grade, { count: QUIZ_LENGTH, topic, weights });
+  const questions = makeQuiz(grade, { count: QUIZ_LENGTH, topic, weights: mode === 'weak' ? weakWeights(grade) : null });
   state.quiz = { mode, topic, grade, questions, i: 0, answers: [], sessionId: null, saveFailed: false, shownAt: 0 };
-  const { data, error } = await sb.from('matte_sessions').insert({ child_id: state.child.id, grade, lang: state.lang, mode }).select('id').single();
-  if (error) { state.quiz.saveFailed = true; console.error(error); } else state.quiz.sessionId = data.id;
+  try {
+    state.quiz.sessionId = await rpc('matte_start', { p_token: state.token, p_grade: grade, p_lang: state.lang, p_mode: mode });
+  } catch (e) {
+    if (isLoggedOutErr(e)) { state.quiz = null; return navActions.logout(); }
+    state.quiz.saveFailed = true; console.error(e);
+  }
   showQuestion();
 }
 
 function showQuestion() {
   const Q = state.quiz; if (!Q) return route();
-  current = () => showQuestion(true);
+  current = showQuestion;
   setNav([[t('quit'), 'quit']]);
   navActions.quit = () => { if (confirm(t('quitConfirm'))) finishQuiz(true); };
   const q = Q.questions[Q.i], picked = Q.answers[Q.i];
@@ -308,33 +260,36 @@ function showQuestion() {
 }
 
 async function answer(k) {
-  const Q = state.quiz, q = Q.questions[Q.i];
-  if (Q.answers[Q.i] !== undefined) return;
+  const Q = state.quiz, q = Q.questions[Q.i], idx = Q.i;
+  if (Q.answers[idx] !== undefined) return;
   const ms = Math.round(performance.now() - Q.shownAt);
-  Q.answers[Q.i] = k;
+  Q.answers[idx] = k;
   showQuestion();
   if (!Q.sessionId) return;
-  const { error } = await sb.from('matte_answers').insert({
-    child_id: state.child.id, session_id: Q.sessionId, gen_id: q.genId, topic: q.topic, grade: q.grade, correct: k === q.correct, time_ms: Math.min(ms, 3600000),
-  });
-  if (error) { console.error(error); if (!Q.saveFailed) { Q.saveFailed = true; if (state.quiz === Q && Q.answers[Q.i] !== undefined) showQuestion(); } }
+  try {
+    await rpc('matte_answer', { p_token: state.token, p_session: Q.sessionId, p_gen: q.genId, p_topic: q.topic, p_grade: q.grade, p_correct: k === q.correct, p_time_ms: ms });
+  } catch (e) {
+    console.error(e);
+    if (!Q.saveFailed) { Q.saveFailed = true; if (state.quiz === Q && Q.i === idx) showQuestion(); }
+  }
 }
 
 async function finishQuiz(quit = false) {
   const Q = state.quiz; if (!Q) return;
-  const answered = Q.answers.filter((a) => a !== undefined).length;
   const correct = Q.questions.filter((q, i) => Q.answers[i] === q.correct).length;
-  if (Q.sessionId) {
-    await sb.from('matte_sessions').update({ total: answered, correct, finished_at: new Date().toISOString() }).eq('id', Q.sessionId);
-  }
   state.quiz = null;
+  if (Q.sessionId) {
+    try { await rpc('matte_finish', { p_token: state.token, p_session: Q.sessionId }); } catch (e) { console.error(e); }
+  }
+  state.me = null; // läs om statistiken nästa gång
+  try { await loadMe(); } catch { /* visas vid nästa route */ }
   if (quit) return route();
   showResult(Q, correct);
 }
 
 function showResult(Q, correct) {
   current = () => showResult(Q, correct);
-  setNav([[t('profiles'), 'profiles'], [t('stats'), 'stats']]);
+  setNav([[t('home'), 'home'], [t('myStats'), 'mystats']]);
   const n = Q.questions.length, p = correct / n, L = state.lang;
   const stars = p === 1 ? 3 : p >= 0.7 ? 2 : p >= 0.4 ? 1 : 0;
   h(`<div class="card result" style="max-width:720px;margin:20px auto">
@@ -355,62 +310,95 @@ function showResult(Q, correct) {
   $('#home').onclick = () => route();
 }
 
-// ---------- statistik ----------
-async function showStats(childId) {
-  current = () => showStats(childId);
-  parentNav();
+// ---------- statistik (gemensamma byggstenar) ----------
+const pct = (c, n) => (n ? Math.round((c / n) * 100) : 0);
+const barColor = (p) => (p >= 0.8 ? 'var(--green)' : p >= 0.5 ? 'var(--orange)' : 'var(--red)');
+function topicBars(topics) {
+  const L = state.lang;
+  return [...topics].sort((a, b) => a.c / a.n - b.c / b.n).map((x) => {
+    const p = x.c / x.n;
+    return `<div class="bar"><span>${TOPICS[x.topic]?.icon || ''} ${TOPICS[x.topic]?.[L] || esc(x.topic)}</span><div class="track"><div class="fill" style="width:${p * 100}%;background:${barColor(p)}"></div></div><span class="pct">${Math.round(p * 100)} % <span class="muted small">(${x.n})</span></span></div>`;
+  }).join('');
+}
+function dayBars(days, today) {
+  const per = Object.fromEntries((days || []).map((d) => [d.day, d.n]));
+  const list = [...Array(14)].map((_, i) => { const d = new Date(today + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - 13 + i); return d; });
+  const max = Math.max(1, ...list.map((d) => per[d.toISOString().slice(0, 10)] || 0));
+  return `<div class="days">${list.map((d) => { const k = d.toISOString().slice(0, 10), v = per[k] || 0; return `<div class="d" title="${k}: ${v}"><span>${v || ''}</span><div class="col ${v ? '' : 'zero'}" style="height:${(v / max) * 100}%"></div><span>${d.getUTCDate()}</span></div>`; }).join('')}</div>`;
+}
+const fmtDate = (d) => new Date(d).toLocaleDateString(state.lang === 'sv' ? 'sv-SE' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+async function showMyStats() {
+  current = showMyStats;
+  setNav([[t('home'), 'home'], [t('logout'), 'logout']]);
   h(`<div class="spin">${t('loading')}</div>`);
-  try {
-    if (!state.children.length) await loadChildren();
-    if (!childId) childId = state.children[0]?.id;
-    if (!childId) { h(`<div class="card center">${t('noChildren')}</div>`); return; }
-    const since = new Date(Date.now() - 90 * 864e5).toISOString();
-    const [ans, ses] = await Promise.all([
-      sb.from('matte_answers').select('topic, correct, created_at').eq('child_id', childId).gte('created_at', since).order('created_at', { ascending: false }).limit(5000),
-      sb.from('matte_sessions').select('*').eq('child_id', childId).order('started_at', { ascending: false }).limit(20),
-    ]);
-    if (ans.error) throw ans.error;
-    if (ses.error) throw ses.error;
-    renderStats(childId, ans.data, ses.data);
-  } catch (e) { h(''); showError(e); }
+  try { await loadMe(); } catch (e) { h(''); return showError(e); }
+  const me = state.me;
+  if (!me.answers) { h(`<h1>${t('myStats')}</h1><div class="card">${t('noData')}</div>`); return; }
+  h(`<h1>${avatarFor(me)} ${t('myStats')}</h1><p class="muted small">${t('days90')}</p>
+    <div class="kpis">
+      <div class="kpi"><span class="v">${me.quizzes}</span><span class="l">${t('totalQuizzes')}</span></div>
+      <div class="kpi"><span class="v">${me.answers}</span><span class="l">${t('totalAnswers')}</span></div>
+      <div class="kpi"><span class="v">${pct(me.correct, me.answers)} %</span><span class="l">${t('accuracy')}</span></div>
+      <div class="kpi"><span class="v">${me.days.length}</span><span class="l">${t('activeDays')}</span></div>
+    </div>
+    <div class="card section"><h3>${t('byTopic')}</h3><div class="bars">${topicBars(me.topics)}</div></div>
+    <div class="card section"><h3>${t('last14')}</h3>${dayBars(me.days, me.today)}</div>
+    <div class="card section"><h3>${t('recent')}</h3><table class="list"><tr><th>${t('date')}</th><th>${t('mode')}</th><th>${t('grade')}</th><th>${t('result')}</th></tr>
+      ${me.recent.map((s) => `<tr><td>${fmtDate(s.started_at)}</td><td>${t('modes')[s.mode] || esc(s.mode)}</td><td>${s.grade}</td><td><b>${s.correct}/${s.total}</b></td></tr>`).join('')}
+    </table></div>`);
 }
 
-function renderStats(childId, answers, sessions) {
-  const L = state.lang, child = state.children.find((c) => c.id === childId);
-  const tabs = `<div class="chips" style="margin:14px 0">${state.children.map((c) => `<button class="chip ${c.id === childId ? 'on' : ''}" data-c="${c.id}">${esc(c.avatar)} ${esc(c.name)}</button>`).join('')}</div>`;
-  const bind = () => app.querySelectorAll('[data-c]').forEach((b) => (b.onclick = () => showStats(b.dataset.c)));
-  if (!answers.length) { h(`<h1>${t('stats')}</h1>${tabs}<div class="card">${t('noData')}</div>`); return bind(); }
-  const nCorrect = answers.filter((a) => a.correct).length;
-  const dayKey = (d) => new Date(d).toLocaleDateString('sv-SE');
-  const perDay = {};
-  answers.forEach((a) => { perDay[dayKey(a.created_at)] = (perDay[dayKey(a.created_at)] || 0) + 1; });
-  const byTopic = {};
-  answers.forEach((a) => { const x = (byTopic[a.topic] ||= { n: 0, c: 0 }); x.n++; if (a.correct) x.c++; });
-  const topicRows = Object.entries(byTopic).sort((a, b) => a[1].c / a[1].n - b[1].c / b[1].n);
-  const color = (p) => (p >= 0.8 ? 'var(--green)' : p >= 0.5 ? 'var(--orange)' : 'var(--red)');
-  const days = [...Array(14)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - 13 + i); return d; });
-  const maxDay = Math.max(1, ...days.map((d) => perDay[dayKey(d)] || 0));
-  const fmtDate = (d) => new Date(d).toLocaleDateString(L === 'sv' ? 'sv-SE' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  h(`<h1>${t('stats')}: ${esc(child?.avatar || '')} ${esc(child?.name || '')}</h1>${tabs}
-    <p class="muted small">90 ${L === 'sv' ? 'dagar' : 'days'}</p>
+// ---------- vuxen-/lärarvy ----------
+async function showTeacher(days = 30, msg = null) {
+  current = () => showTeacher(days, msg);
+  setNav([[t('logout'), 'teacherLogout']]);
+  h(`<div class="spin">${t('loading')}</div>`);
+  let s;
+  try { s = await rpc('matte_teacher_stats', { p_token: state.teacher, p_days: days }); } catch (e) {
+    if (isLoggedOutErr(e)) { state.teacher = null; store.del('matte.teacher'); return showAuth('teacher', { type: 'err', text: errText(e) }); }
+    h(''); return showError(e);
+  }
+  const L = state.lang;
+  const tot = s.kids.reduce((a, k) => ({ n: a.n + k.answers, c: a.c + k.correct, q: a.q + k.quizzes }), { n: 0, c: 0, q: 0 });
+  const weakest = (topics) => { const x = (topics || []).filter((y) => y.n >= 3).sort((a, b) => a.c / a.n - b.c / b.n)[0]; return x ? `${TOPICS[x.topic]?.icon || ''} ${TOPICS[x.topic]?.[L] || esc(x.topic)} (${pct(x.c, x.n)} %)` : '–'; };
+  h(`<h1>👩‍🏫 ${t('stats')}</h1>
+    <div class="row"><b>${t('period')}:</b><div class="chips" id="per">${[7, 30, 90].map((d) => `<button class="chip ${d === days ? 'on' : ''}" data-d="${d}">${t('daysN', d)}</button>`).join('')}</div></div>
+    ${msg ? `<div class="notice ${msg.type}" style="margin-top:14px">${esc(msg.text)}</div>` : ''}
+    ${s.kids.length ? `
     <div class="kpis">
-      <div class="kpi"><span class="v">${sessions.filter((s) => s.finished_at).length}${sessions.length === 20 ? '+' : ''}</span><span class="l">${t('totalQuizzes')}</span></div>
-      <div class="kpi"><span class="v">${answers.length}</span><span class="l">${t('totalAnswers')}</span></div>
-      <div class="kpi"><span class="v">${Math.round((nCorrect / answers.length) * 100)} %</span><span class="l">${t('accuracy')}</span></div>
-      <div class="kpi"><span class="v">${Object.keys(perDay).length}</span><span class="l">${t('activeDays')}</span></div>
+      <div class="kpi"><span class="v">${s.kids.length}</span><span class="l">${t('students')}</span></div>
+      <div class="kpi"><span class="v">${tot.q}</span><span class="l">${t('totalQuizzes')}</span></div>
+      <div class="kpi"><span class="v">${tot.n}</span><span class="l">${t('totalAnswers')}</span></div>
+      <div class="kpi"><span class="v">${pct(tot.c, tot.n)} %</span><span class="l">${t('accuracy')}</span></div>
     </div>
-    <div class="card section"><h3>${t('byTopic')}</h3><div class="bars">
-      ${topicRows.map(([k, x]) => { const p = x.c / x.n; return `<div class="bar"><span>${TOPICS[k]?.icon || ''} ${TOPICS[k]?.[L] || k}</span><div class="track"><div class="fill" style="width:${p * 100}%;background:${color(p)}"></div></div><span class="pct">${Math.round(p * 100)} % <span class="muted small">(${x.n})</span></span></div>`; }).join('')}
-    </div></div>
-    <div class="card section"><h3>${t('last14')}</h3><div class="days">
-      ${days.map((d) => { const v = perDay[dayKey(d)] || 0; return `<div class="d" title="${dayKey(d)}: ${v}"><span>${v || ''}</span><div class="col ${v ? '' : 'zero'}" style="height:${(v / maxDay) * 100}%"></div><span>${d.getDate()}</span></div>`; }).join('')}
-    </div></div>
-    <div class="card section"><h3>${t('recent')}</h3><table class="list"><tr><th>${t('date')}</th><th>${t('mode')}</th><th>${t('grade')}</th><th>${t('result')}</th></tr>
-      ${sessions.filter((s) => s.total > 0).map((s) => `<tr><td>${fmtDate(s.started_at)}</td><td>${t('modes')[s.mode] || s.mode}</td><td>${s.grade}</td><td><b>${s.correct}/${s.total}</b></td></tr>`).join('')}
-    </table></div>`);
-  bind();
+    <div class="card section" style="overflow-x:auto"><h3>${t('students')}</h3><table class="list">
+      <tr><th>${t('student')}</th><th>${t('totalQuizzes')}</th><th>${t('totalAnswers')}</th><th>${t('accuracy')}</th><th>${t('weakest')}</th><th>${t('lastActive')}</th></tr>
+      ${s.kids.map((k) => `<tr><td><b>${esc(k.name)}</b></td><td>${k.quizzes}</td><td>${k.answers}</td><td><b style="color:${barColor(k.correct / Math.max(1, k.answers))}">${pct(k.correct, k.answers)} %</b></td><td>${weakest(k.topics)}</td><td>${k.last ? fmtDate(k.last) : '–'}</td></tr>`).join('')}
+    </table></div>
+    <div class="card section"><h3>${t('byTopic')}</h3><div class="bars">${topicBars(s.topics)}</div></div>
+    <div class="card section"><h3>${t('last14')}</h3>${dayBars(s.days, s.today)}</div>`
+    : `<div class="card section">${t('noStudents')}</div>`}
+    <div class="card section"><h3>🔑 ${t('resetTitle')}</h3>
+      <form class="row" id="resetForm" style="align-items:flex-end">
+        <div style="flex:1;min-width:160px"><label for="rn">${t('name')}</label><input id="rn" required maxlength="16"></div>
+        <div style="flex:1;min-width:160px"><label for="rp">${t('newPassword')}</label><input id="rp" required minlength="4" maxlength="64" autocomplete="new-password"></div>
+        <button class="btn orange" type="submit">${t('resetBtn')}</button>
+      </form></div>`);
+  app.querySelectorAll('#per button').forEach((b) => (b.onclick = () => showTeacher(Number(b.dataset.d))));
+  $('#resetForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $('#rn').value.trim();
+    try {
+      await rpc('teacher_reset_password', { p_token: state.teacher, p_name: name, p_new: $('#rp').value });
+      showTeacher(days, { type: 'ok', text: t('resetDone', name) });
+    } catch (err) {
+      if (isLoggedOutErr(err)) return navActions.teacherLogout();
+      showTeacher(days, { type: 'err', text: errText(err) });
+    }
+  };
 }
 
 // ---------- start ----------
 setLang(state.lang);
-h(`<div class="spin">${t('loading')}</div>`);
+route();
