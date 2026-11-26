@@ -46,6 +46,9 @@ export const STRINGS = {
     resetDone: (n) => `Klart! ${n} kan nu logga in med det nya lösenordet.`,
     noStudents: 'Ingen har kört mattequiz under perioden än.',
     changeAvatar: 'Byt figur',
+    guestBtn: 'Räkna som gäst', guestName: 'Gäst', loginOrRegister: 'Logga in / skapa konto',
+    guestHint: 'Utan konto. Resultaten sparas inte.',
+    guestNote: 'Du räknar som gäst. Resultaten sparas inte. Skapa ett konto om du vill spara dem och se din statistik.',
   },
   en: {
     appName: 'Maths Puzzler',
@@ -94,5 +97,8 @@ export const STRINGS = {
     resetDone: (n) => `Done! ${n} can now log in with the new password.`,
     noStudents: 'Nobody has played a maths quiz in this period yet.',
     changeAvatar: 'Change avatar',
+    guestBtn: 'Play as guest', guestName: 'Guest', loginOrRegister: 'Log in / sign up',
+    guestHint: 'No account. Results are not saved.',
+    guestNote: 'You are playing as a guest. Results are not saved. Create an account to keep them and see your stats.',
   },
 };

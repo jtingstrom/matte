@@ -6,6 +6,7 @@ Problemlösning i matematik för årskurs 4–7, på svenska och engelska. Uppgi
 - **Vuxen/lärare** loggar in med cyberdynes lärarlösenord: statistik för alla elever och möjlighet att sätta nytt lösenord åt den som glömt
 - **Quiz** med 10 uppgifter: blandat, per område eller "träna på det svåra" (viktat mot uppgifter barnet ofta svarar fel på)
 - Direkt rätt/fel med **förklaring** efter varje svar
+- **Gästläge**: räkna direkt utan konto (inget sparas i databasen)
 - **Statistik** för varje barn (egen vy) och för alla (lärarvyn)
 - 39 uppgiftsgeneratorer som skapar nya varianter varje gång. Svaren räknas fram i koden och testas automatiskt.
 

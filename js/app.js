@@ -20,6 +20,7 @@ const state = {
   lang: store.get('matte.lang', (navigator.language || 'sv').startsWith('sv') ? 'sv' : 'en'),
   token: store.get('matte.token'),
   teacher: store.get('matte.teacher'),
+  guest: store.get('matte.guest') === '1',
   me: null,
   level: null,
   quiz: null,
@@ -59,13 +60,14 @@ navActions.home = () => route();
 navActions.mystats = () => showMyStats();
 navActions.logout = async () => {
   if (state.token) sb.rpc('logout_player', { p_token: state.token }).then(() => {}, () => {});
-  state.token = null; state.me = null; store.del('matte.token');
+  state.token = null; state.me = null; state.guest = false; state.level = null;
+  store.del('matte.token'); store.del('matte.guest');
   showAuth();
 };
 navActions.teacherLogout = () => {
   if (state.teacher) sb.rpc('teacher_logout', { p_token: state.teacher }).then(() => {}, () => {});
   state.teacher = null; store.del('matte.teacher'); showAuth('teacher'); };
-const kidNav = () => setNav([[t('myStats'), 'mystats'], [t('logout'), 'logout']]);
+const kidNav = () => setNav(state.guest ? [[t('loginOrRegister'), 'logout']] : [[t('myStats'), 'mystats'], [t('logout'), 'logout']]);
 
 function showError(e) {
   console.error(e);
@@ -78,7 +80,7 @@ function showError(e) {
 
 // ---------- routing ----------
 async function route() {
-  if (!state.token) return showAuth(state.teacher ? 'teacher' : 'login');
+  if (!state.token && !state.guest) return showAuth(state.teacher ? 'teacher' : 'login');
   if (!state.me) {
     h(`<div class="spin">${t('loading')}</div>`);
     try { await loadMe(); } catch (e) {
@@ -89,8 +91,29 @@ async function route() {
   showHome();
 }
 
+// Gästläge: inget sparas i databasen, bara lite lokalt i webbläsaren för "Träna på det svåra"
+const readJson = (k, d) => { try { return JSON.parse(store.get(k)) ?? d; } catch { return d; } };
+function guestMe() {
+  const gens = readJson('matte.guest.gens', {});
+  return {
+    id: 'guest', name: t('guestName'), grade: 4, last_grade: null,
+    days: readJson('matte.guest.days', []).map((day) => ({ day, n: 1 })),
+    gens: Object.entries(gens).map(([k, v]) => { const [gen_id, grade] = k.split('|'); return { gen_id, grade: Number(grade), n: v.n, w: v.w }; }),
+    today: new Date().toLocaleDateString('sv-SE'),
+  };
+}
+function guestRecord(q, ok) {
+  const gens = readJson('matte.guest.gens', {});
+  const k = `${q.genId}|${q.grade}`;
+  const x = (gens[k] ||= { n: 0, w: 0 }); x.n++; if (!ok) x.w++;
+  store.set('matte.guest.gens', JSON.stringify(gens));
+  const days = new Set(readJson('matte.guest.days', []));
+  days.add(new Date().toLocaleDateString('sv-SE'));
+  store.set('matte.guest.days', JSON.stringify([...days].sort().slice(-60)));
+}
+
 async function loadMe() {
-  state.me = await rpc('matte_me', { p_token: state.token });
+  state.me = state.guest ? guestMe() : await rpc('matte_me', { p_token: state.token });
   if (!state.level) {
     const saved = Number(store.get(`matte.level.${state.me.id}`));
     state.level = state.me.last_grade || (saved >= 4 && saved <= 7 ? saved : Math.min(7, Math.max(4, state.me.grade)));
@@ -122,8 +145,13 @@ function showAuth(tab = 'login', msg = null) {
       ${tab === 'teacher' ? '' : `<p class="muted small">${t('sameAccount')}${tab === 'login' ? ' ' + t('forgotHint') : ''}</p>`}
     </form>
   </div>
+  ${tab === 'teacher' ? '' : `<div style="text-align:center;margin:-10px 0 18px"><button class="btn secondary big" id="guest">👤 ${t('guestBtn')}</button><p class="muted small">${t('guestHint')}</p></div>`}
   <p style="text-align:center"><button class="linkbtn" data-tab="${tab === 'teacher' ? 'login' : 'teacher'}">${tab === 'teacher' ? '← ' + t('login') : '👩‍🏫 ' + t('teacher')}</button></p>`);
   app.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => showAuth(b.dataset.tab)));
+  if ($('#guest')) $('#guest').onclick = () => {
+    state.guest = true; state.me = null; state.level = null; store.set('matte.guest', '1');
+    route();
+  };
   app.querySelectorAll('#grades button').forEach((b) => (b.onclick = () => {
     grade = Number(b.dataset.g);
     app.querySelectorAll('#grades button').forEach((x) => x.classList.toggle('on', x === b));
@@ -153,6 +181,7 @@ function showAuth(tab = 'login', msg = null) {
         state.level = null;
       }
       store.set('matte.token', state.token);
+      state.guest = false; store.del('matte.guest');
       state.me = null;
       route();
     } catch (err) {
@@ -170,6 +199,7 @@ function showHome() {
   h(`<div class="welcome"><button class="av avbtn" id="av" title="${t('changeAvatar')}">${avatarFor(me)}</button>
       <div><h1>${t('hi', esc(me.name))}</h1><span id="streak" class="muted"></span></div>
       <span class="spacer"></span><div><label>${t('level')}</label><div class="chips" id="lvl">${[4, 5, 6, 7].map((x) => `<button class="chip ${x === g ? 'on' : ''}" data-g="${x}">${x}</button>`).join('')}</div></div></div>
+    ${state.guest ? `<div class="notice row" style="margin-bottom:6px"><span>👋 ${t('guestNote')}</span><span class="spacer"></span><button class="btn orange" id="toLogin">${t('register')}</button></div>` : ''}
     <div class="modes">
       <button class="mode" style="background:var(--blue)" id="mixed"><span class="ic">🎯</span><b>${t('mixed')}</b><span>${t('mixedDesc', QUIZ_LENGTH)}</span></button>
       <button class="mode" style="background:var(--purple)" id="weak"><span class="ic">💪</span><b>${t('weak')}</b><span>${t('weakDesc')}</span></button>
@@ -182,6 +212,7 @@ function showHome() {
     $('#av').textContent = AVATARS[i];
   };
   app.querySelectorAll('#lvl button').forEach((b) => (b.onclick = () => { state.level = Number(b.dataset.g); store.set(`matte.level.${me.id}`, state.level); showHome(); }));
+  if (state.guest) $('#toLogin').onclick = () => { navActions.logout().then(() => showAuth('register')); };
   $('#mixed').onclick = () => startQuiz('quiz');
   $('#weak').onclick = () => startQuiz('weak');
   app.querySelectorAll('[data-topic]').forEach((b) => (b.onclick = () => startQuiz('topic', b.dataset.topic)));
@@ -216,6 +247,7 @@ async function startQuiz(mode, topic = null) {
   h(`<div class="spin">${t('loading')}</div>`);
   const questions = makeQuiz(grade, { count: QUIZ_LENGTH, topic, weights: mode === 'weak' ? weakWeights(grade) : null });
   state.quiz = { mode, topic, grade, questions, i: 0, answers: [], sessionId: null, saveFailed: false, shownAt: 0 };
+  if (state.guest) return showQuestion();
   try {
     state.quiz.sessionId = await rpc('matte_start', { p_token: state.token, p_grade: grade, p_lang: state.lang, p_mode: mode });
   } catch (e) {
@@ -267,6 +299,7 @@ async function answer(k) {
   const ms = Math.round(performance.now() - Q.shownAt);
   Q.answers[idx] = k;
   showQuestion();
+  if (state.guest) return guestRecord(q, k === q.correct);
   if (!Q.sessionId) return;
   try {
     await rpc('matte_answer', { p_token: state.token, p_session: Q.sessionId, p_gen: q.genId, p_topic: q.topic, p_grade: q.grade, p_correct: k === q.correct, p_time_ms: ms });
@@ -291,7 +324,7 @@ async function finishQuiz(quit = false) {
 
 function showResult(Q, correct) {
   current = () => showResult(Q, correct);
-  setNav([[t('home'), 'home'], [t('myStats'), 'mystats']]);
+  setNav(state.guest ? [[t('home'), 'home'], [t('loginOrRegister'), 'logout']] : [[t('home'), 'home'], [t('myStats'), 'mystats']]);
   const n = Q.questions.length, p = correct / n, L = state.lang;
   const stars = p === 1 ? 3 : p >= 0.7 ? 2 : p >= 0.4 ? 1 : 0;
   h(`<div class="card result" style="max-width:720px;margin:20px auto">
