@@ -62,7 +62,9 @@ navActions.logout = async () => {
   state.token = null; state.me = null; store.del('matte.token');
   showAuth();
 };
-navActions.teacherLogout = () => { state.teacher = null; store.del('matte.teacher'); showAuth('teacher'); };
+navActions.teacherLogout = () => {
+  if (state.teacher) sb.rpc('teacher_logout', { p_token: state.teacher }).then(() => {}, () => {});
+  state.teacher = null; store.del('matte.teacher'); showAuth('teacher'); };
 const kidNav = () => setNav([[t('myStats'), 'mystats'], [t('logout'), 'logout']]);
 
 function showError(e) {
