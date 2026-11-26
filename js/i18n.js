@@ -4,9 +4,9 @@ export const STRINGS = {
     tagline: 'Kluriga matteuppgifter för åk 4–7',
     login: 'Logga in', register: 'Skapa konto', logout: 'Logga ut', teacher: 'Vuxen / lärare',
     name: 'Namn', password: 'Lösenord', teacherPassword: 'Lärarlösenord', grade: 'Årskurs',
-    sameAccount: 'Samma konto som på cyberdyne.se. Ingen e-post behövs.',
+    sameAccount: 'Bara namn och lösenord, ingen e-post behövs.',
     forgotHint: 'Glömt lösenordet? Be en vuxen logga in som lärare och sätta ett nytt.',
-    teacherHint: 'Samma lärarlösenord som på cyberdyne.se.',
+    teacherHint: 'För lärare och föräldrar: se elevernas resultat och hjälp den som glömt sitt lösenord.',
     nameRules: '2–16 tecken: bokstäver, siffror, mellanslag, - och _',
     errors: {
       wrong_login: 'Fel namn eller lösenord.',
@@ -52,9 +52,9 @@ export const STRINGS = {
     tagline: 'Tricky maths problems for grades 4–7',
     login: 'Log in', register: 'Create account', logout: 'Log out', teacher: 'Adult / teacher',
     name: 'Name', password: 'Password', teacherPassword: 'Teacher password', grade: 'Grade',
-    sameAccount: 'Same account as on cyberdyne.se. No email needed.',
+    sameAccount: 'Just a name and password, no email needed.',
     forgotHint: 'Forgot your password? Ask an adult to log in as teacher and set a new one.',
-    teacherHint: 'Same teacher password as on cyberdyne.se.',
+    teacherHint: 'For teachers and parents: see students\' results and help anyone who forgot their password.',
     nameRules: '2–16 characters: letters, digits, spaces, - and _',
     errors: {
       wrong_login: 'Wrong name or password.',

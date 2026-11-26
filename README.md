@@ -1,6 +1,6 @@
 # Mattekluringen 🧮
 
-Kluriga matteuppgifter för årskurs 4–7 i olympiadstil, på svenska och engelska.
+Problemlösning i matematik för årskurs 4–7, på svenska och engelska. Uppgifterna liknar dem i matematiktävlingar (olympiadstil).
 
 - **Samma konton som cyberdyne.se**: barnen loggar in med namn och lösenord, ingen e-post behövs
 - **Vuxen/lärare** loggar in med cyberdynes lärarlösenord: statistik för alla elever och möjlighet att sätta nytt lösenord åt den som glömt
