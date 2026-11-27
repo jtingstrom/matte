@@ -151,6 +151,7 @@ function showAuth(tab = 'login', msg = null) {
     <div class="tabs">
       <button data-tab="login" class="${tab === 'login' ? 'on' : ''}">${t('login')}</button>
       <button data-tab="register" class="${tab === 'register' ? 'on' : ''}">${t('register')}</button>
+      <button id="guest" class="guesttab" title="${t('guestHint')}">👤 ${t('guestTab')}</button>
     </div>
     <form class="stack" id="authForm">
       ${msg ? `<div class="notice ${msg.type}">${esc(msg.text)}</div>` : ''}
@@ -160,10 +161,9 @@ function showAuth(tab = 'login', msg = null) {
            ${field('pw', t('password'), 'password', `minlength="4" maxlength="64" autocomplete="${tab === 'register' ? 'new-password' : 'current-password'}"`)}
            ${tab === 'register' ? `<div><label>${t('grade')}</label><div class="chips" id="grades">${[4, 5, 6, 7].map((g) => `<button type="button" class="chip ${g === grade ? 'on' : ''}" data-g="${g}">${g}</button>`).join('')}</div></div>` : ''}`}
       <button class="btn big" style="width:100%" type="submit">${tab === 'register' ? t('register') : t('login')}</button>
-      ${tab === 'teacher' ? '' : `<p class="muted small">${t('sameAccount')}${tab === 'login' ? ' ' + t('forgotHint') : ''}</p>`}
+      ${tab === 'teacher' ? '' : `<p class="muted small">${t('sameAccount')}${tab === 'login' ? ' ' + t('forgotHint') : ''}<br>👤 ${t('guestTab')}: ${t('guestHint')}</p>`}
     </form>
   </div>
-  ${tab === 'teacher' ? '' : `<div style="text-align:center;margin:-10px 0 18px"><button class="btn secondary big" id="guest">👤 ${t('guestBtn')}</button><p class="muted small">${t('guestHint')}</p></div>`}
   <p style="text-align:center"><button class="linkbtn" data-tab="${tab === 'teacher' ? 'login' : 'teacher'}">${tab === 'teacher' ? '← ' + t('login') : '👩‍🏫 ' + t('teacher')}</button></p>`);
   app.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => showAuth(b.dataset.tab)));
   if ($('#guest')) $('#guest').onclick = () => {

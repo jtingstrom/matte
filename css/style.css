@@ -214,3 +214,5 @@ table.list th, table.list td { text-align: left; padding: 8px 6px; border-bottom
 .subjects .mode.current { outline: 4px solid var(--orange); outline-offset: 3px; }
 .subjbadge { cursor: pointer; margin-right: 8px; }
 .subjbadge:hover { background: #fde68a; }
+.tabs button.guesttab { background: var(--green); color: #fff; }
+.tabs button.guesttab:hover { filter: brightness(1.05); }
