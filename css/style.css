@@ -208,3 +208,9 @@ table.list th, table.list td { text-align: left; padding: 8px 6px; border-bottom
 .spin { display: grid; place-items: center; padding: 60px; color: var(--muted); font-weight: 800; }
 .avbtn { background: none; border: none; padding: 0; line-height: 1; transition: transform .15s; }
 .avbtn:hover { transform: rotate(-10deg) scale(1.08); }
+.subjects .mode { min-height: 170px; }
+.subjects .mode b { font-size: 2rem; }
+.subjects .mode .ic { font-size: 3rem; }
+.subjects .mode.current { outline: 4px solid var(--orange); outline-offset: 3px; }
+.subjbadge { cursor: pointer; margin-right: 8px; }
+.subjbadge:hover { background: #fde68a; }

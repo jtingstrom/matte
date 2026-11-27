@@ -1,6 +1,6 @@
 # Mattekluringen 🧮
 
-Problemlösning i matematik för årskurs 4–7, på svenska och engelska. Uppgifterna liknar dem i matematiktävlingar (olympiadstil).
+Problemlösning i matematik och NO för årskurs 4–7, på svenska och engelska. Uppgifterna liknar dem i STEM-tävlingar (olympiadstil). Man väljer ämne (Matte eller NO) efter inloggning.
 
 - **Samma konton som cyberdyne.se**: barnen loggar in med namn och lösenord, ingen e-post behövs
 - **Vuxen/lärare** loggar in med cyberdynes lärarlösenord: statistik för alla elever och möjlighet att sätta nytt lösenord åt den som glömt
@@ -8,7 +8,8 @@ Problemlösning i matematik för årskurs 4–7, på svenska och engelska. Uppgi
 - Direkt rätt/fel med **förklaring** efter varje svar
 - **Gästläge**: räkna direkt utan konto (inget sparas i databasen)
 - **Statistik** för varje barn (egen vy) och för alla (lärarvyn)
-- 39 uppgiftsgeneratorer som skapar nya varianter varje gång. Svaren räknas fram i koden och testas automatiskt.
+- Matte: 39 uppgiftsgeneratorer som skapar nya varianter varje gång. Svaren räknas fram i koden och testas automatiskt.
+- NO: 75 faktafrågor och 9 generatorer inom krafter, elektricitet, ljus & ljud, värme, rymden, kroppen, ekologi, kemi, undersökningar och energi (`js/science.js`).
 
 ## Teknik
 

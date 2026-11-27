@@ -1,7 +1,8 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import { SUPABASE_URL, SUPABASE_KEY, QUIZ_LENGTH } from './config.js';
 import { STRINGS } from './i18n.js';
-import { TOPICS, topicsFor, makeQuiz, optionText, generatorsFor } from './questions.js';
+import { TOPICS, SUBJECTS, topicsFor, makeQuiz, optionText, generatorsFor } from './questions.js';
+import './science.js';
 
 // Inloggning sker med cyberdynes konton (namn + lösenord) via databasfunktioner, inte Supabase Auth.
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
@@ -21,6 +22,7 @@ const state = {
   token: store.get('matte.token'),
   teacher: store.get('matte.teacher'),
   guest: store.get('matte.guest') === '1',
+  subject: SUBJECTS[store.get('matte.subject')] ? store.get('matte.subject') : null,
   me: null,
   level: null,
   quiz: null,
@@ -57,6 +59,7 @@ function setNav(items) {
   nav.querySelectorAll('[data-nav]').forEach((b) => (b.onclick = () => navActions[b.dataset.nav]()));
 }
 navActions.home = () => route();
+navActions.subject = () => showSubjectPicker();
 navActions.mystats = () => showMyStats();
 navActions.logout = async () => {
   if (state.token) sb.rpc('logout_player', { p_token: state.token }).then(() => {}, () => {});
@@ -67,7 +70,7 @@ navActions.logout = async () => {
 navActions.teacherLogout = () => {
   if (state.teacher) sb.rpc('teacher_logout', { p_token: state.teacher }).then(() => {}, () => {});
   state.teacher = null; store.del('matte.teacher'); showAuth('teacher'); };
-const kidNav = () => setNav(state.guest ? [[t('loginOrRegister'), 'logout']] : [[t('myStats'), 'mystats'], [t('logout'), 'logout']]);
+const kidNav = () => setNav(state.guest ? [[t('changeSubject'), 'subject'], [t('loginOrRegister'), 'logout']] : [[t('changeSubject'), 'subject'], [t('myStats'), 'mystats'], [t('logout'), 'logout']]);
 
 function showError(e) {
   console.error(e);
@@ -88,7 +91,22 @@ async function route() {
       h(''); return showError(e);
     }
   }
+  if (!state.subject) return showSubjectPicker();
   showHome();
+}
+
+// ---------- ämnesval ----------
+function showSubjectPicker() {
+  current = showSubjectPicker;
+  setNav(state.guest ? [[t('loginOrRegister'), 'logout']] : [[t('myStats'), 'mystats'], [t('logout'), 'logout']]);
+  const me = state.me;
+  h(`<div class="hero"><h1>${me ? t('hi', esc(me.name)) + ' ' : ''}${t('pickSubject')}</h1></div>
+    <div class="modes subjects">${Object.entries(SUBJECTS).map(([k, sub]) => `<button class="mode subject ${k === state.subject ? 'current' : ''}" style="background:${sub.color}" data-s="${k}">
+      <span class="ic">${sub.icon}</span><b>${sub[state.lang]}</b><span>${t('subjectDesc')[k]}</span></button>`).join('')}</div>`);
+  app.querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => {
+    state.subject = b.dataset.s; store.set('matte.subject', state.subject);
+    showHome();
+  }));
 }
 
 // Gästläge: inget sparas i databasen, bara lite lokalt i webbläsaren för "Träna på det svåra"
@@ -195,17 +213,19 @@ function showHome() {
   current = showHome;
   kidNav();
   const me = state.me, g = state.level;
-  const topics = topicsFor(g);
+  const subj = state.subject || 'math', sub = SUBJECTS[subj];
+  const topics = topicsFor(g, subj);
   h(`<div class="welcome"><button class="av avbtn" id="av" title="${t('changeAvatar')}">${avatarFor(me)}</button>
-      <div><h1>${t('hi', esc(me.name))}</h1><span id="streak" class="muted"></span></div>
+      <div><h1>${t('hi', esc(me.name))}</h1><button class="badge subjbadge" id="subj" title="${t('changeSubject')}">${sub.icon} ${sub[state.lang]} ⇄</button> <span id="streak" class="muted"></span></div>
       <span class="spacer"></span><div><label>${t('level')}</label><div class="chips" id="lvl">${[4, 5, 6, 7].map((x) => `<button class="chip ${x === g ? 'on' : ''}" data-g="${x}">${x}</button>`).join('')}</div></div></div>
     ${state.guest ? `<div class="notice row" style="margin-bottom:6px"><span>👋 ${t('guestNote')}</span><span class="spacer"></span><button class="btn orange" id="toLogin">${t('register')}</button></div>` : ''}
     <div class="modes">
-      <button class="mode" style="background:var(--blue)" id="mixed"><span class="ic">🎯</span><b>${t('mixed')}</b><span>${t('mixedDesc', QUIZ_LENGTH)}</span></button>
+      <button class="mode" style="background:${sub.color}" id="mixed"><span class="ic">🎯</span><b>${t('mixed')}</b><span>${t('mixedDesc', QUIZ_LENGTH)}</span></button>
       <button class="mode" style="background:var(--purple)" id="weak"><span class="ic">💪</span><b>${t('weak')}</b><span>${t('weakDesc')}</span></button>
     </div>
     <h2>${t('topicTitle')}</h2>
     <div class="topics">${topics.map((k) => `<button class="topic" data-topic="${k}"><span class="ic">${TOPICS[k].icon}</span>${TOPICS[k][state.lang]}</button>`).join('')}</div>`);
+  $('#subj').onclick = () => showSubjectPicker();
   $('#av').onclick = () => {
     const i = (AVATARS.indexOf(avatarFor(me)) + 1) % AVATARS.length;
     store.set(`matte.avatar.${me.id}`, AVATARS[i]);
@@ -234,7 +254,7 @@ function weakWeights(grade) {
   const agg = {};
   for (const x of state.me?.gens || []) if (x.grade === grade) agg[x.gen_id] = x;
   const weights = {};
-  for (const gn of generatorsFor(grade)) {
+  for (const gn of generatorsFor(grade, null, state.subject || 'math')) {
     const x = agg[gn.id];
     weights[gn.id] = x ? 1 + Math.round(8 * (x.w / x.n)) : 2; // osedda uppgifter får lite extra vikt
   }
@@ -243,13 +263,13 @@ function weakWeights(grade) {
 
 // ---------- quiz ----------
 async function startQuiz(mode, topic = null) {
-  const grade = state.level;
+  const grade = state.level, subject = state.subject || 'math';
   h(`<div class="spin">${t('loading')}</div>`);
-  const questions = makeQuiz(grade, { count: QUIZ_LENGTH, topic, weights: mode === 'weak' ? weakWeights(grade) : null });
-  state.quiz = { mode, topic, grade, questions, i: 0, answers: [], sessionId: null, saveFailed: false, shownAt: 0 };
+  const questions = makeQuiz(grade, { count: QUIZ_LENGTH, topic, subject, weights: mode === 'weak' ? weakWeights(grade) : null });
+  state.quiz = { mode, topic, grade, subject, questions, i: 0, answers: [], sessionId: null, saveFailed: false, shownAt: 0 };
   if (state.guest) return showQuestion();
   try {
-    state.quiz.sessionId = await rpc('matte_start', { p_token: state.token, p_grade: grade, p_lang: state.lang, p_mode: mode });
+    state.quiz.sessionId = await rpc('matte_start', { p_token: state.token, p_grade: grade, p_lang: state.lang, p_mode: mode, p_subject: subject });
   } catch (e) {
     if (isLoggedOutErr(e)) { state.quiz = null; return navActions.logout(); }
     state.quiz.saveFailed = true; console.error(e);
@@ -270,7 +290,7 @@ function showQuestion() {
     <div class="card qcard">
       <div class="qtop"><span class="qnum">${t('question', Q.i + 1, Q.questions.length)}</span><span class="badge">${topic.icon} ${topic[L]}</span></div>
       <div class="qtext">${q.q[L]}</div>
-      ${q.visual ? `<div class="visual">${q.visual}</div>` : ''}
+      ${q.visual ? `<div class="visual">${typeof q.visual === 'object' ? q.visual[L] : q.visual}</div>` : ''}
       <div class="answers">${q.options.map((o, k) => {
         const cls = done ? (k === q.correct ? 'right' : k === picked ? 'wrongpick' : '') : '';
         return `<button class="ans ${cls}" data-k="${k}" ${done ? 'disabled' : ''}><span class="letter" style="background:${LETTER_COLORS[k]}">${'ABCD'[k]}</span>${esc(optionText(o, q.unit, L))}</button>`;
@@ -337,17 +357,23 @@ function showResult(Q, correct) {
       ${Q.questions.map((q, i) => {
         const ok = Q.answers[i] === q.correct;
         return `<details><summary>${ok ? '✅' : '❌'} ${i + 1}. ${TOPICS[q.topic].icon} ${TOPICS[q.topic][L]}</summary><div class="mini">
-          <p>${q.q[L]}</p>${q.visual ? `<div class="visual">${q.visual}</div>` : ''}
+          <p>${q.q[L]}</p>${q.visual ? `<div class="visual">${typeof q.visual === 'object' ? q.visual[L] : q.visual}</div>` : ''}
           <p><b>${t('yourAnswer')}:</b> ${esc(optionText(q.options[Q.answers[i]], q.unit, L))}${ok ? '' : ` · <b>${t('rightAnswer')}</b> ${esc(optionText(q.options[q.correct], q.unit, L))}`}</p>
           <p class="muted">${q.ex[L]}</p></div></details>`;
       }).join('')}</div></div>`);
-  $('#again').onclick = () => startQuiz(Q.mode, Q.topic);
+  $('#again').onclick = () => { state.subject = Q.subject; startQuiz(Q.mode, Q.topic); };
   $('#home').onclick = () => route();
 }
 
 // ---------- statistik (gemensamma byggstenar) ----------
 const pct = (c, n) => (n ? Math.round((c / n) * 100) : 0);
 const barColor = (p) => (p >= 0.8 ? 'var(--green)' : p >= 0.5 ? 'var(--orange)' : 'var(--red)');
+function subjectTopicCards(topics) {
+  return Object.entries(SUBJECTS).map(([k, sub]) => {
+    const list = (topics || []).filter((x) => (x.subject || 'math') === k);
+    return list.length ? `<div class="card section"><h3>${sub.icon} ${sub[state.lang]}: ${t('byTopic').toLowerCase()}</h3><div class="bars">${topicBars(list)}</div></div>` : '';
+  }).join('');
+}
 function topicBars(topics) {
   const L = state.lang;
   return [...topics].sort((a, b) => a.c / a.n - b.c / b.n).map((x) => {
@@ -376,11 +402,12 @@ async function showMyStats() {
       <div class="kpi"><span class="v">${me.answers}</span><span class="l">${t('totalAnswers')}</span></div>
       <div class="kpi"><span class="v">${pct(me.correct, me.answers)} %</span><span class="l">${t('accuracy')}</span></div>
       <div class="kpi"><span class="v">${me.days.length}</span><span class="l">${t('activeDays')}</span></div>
+      ${(me.subjects || []).filter((x) => x.answers).map((x) => `<div class="kpi"><span class="v">${pct(x.correct, x.answers)} %</span><span class="l">${SUBJECTS[x.subject].icon} ${SUBJECTS[x.subject][state.lang]}: ${t('accuracy').toLowerCase()} (${x.answers})</span></div>`).join('')}
     </div>
-    <div class="card section"><h3>${t('byTopic')}</h3><div class="bars">${topicBars(me.topics)}</div></div>
+    ${subjectTopicCards(me.topics)}
     <div class="card section"><h3>${t('last14')}</h3>${dayBars(me.days, me.today)}</div>
-    <div class="card section"><h3>${t('recent')}</h3><table class="list"><tr><th>${t('date')}</th><th>${t('mode')}</th><th>${t('grade')}</th><th>${t('result')}</th></tr>
-      ${me.recent.map((s) => `<tr><td>${fmtDate(s.started_at)}</td><td>${t('modes')[s.mode] || esc(s.mode)}</td><td>${s.grade}</td><td><b>${s.correct}/${s.total}</b></td></tr>`).join('')}
+    <div class="card section"><h3>${t('recent')}</h3><table class="list"><tr><th>${t('date')}</th><th>${t('subject')}</th><th>${t('mode')}</th><th>${t('grade')}</th><th>${t('result')}</th></tr>
+      ${me.recent.map((s) => `<tr><td>${fmtDate(s.started_at)}</td><td>${SUBJECTS[s.subject]?.icon || ''} ${SUBJECTS[s.subject]?.[state.lang] || ''}</td><td>${t('modes')[s.mode] || esc(s.mode)}</td><td>${s.grade}</td><td><b>${s.correct}/${s.total}</b></td></tr>`).join('')}
     </table></div>`);
 }
 
@@ -396,6 +423,7 @@ async function showTeacher(days = 30, msg = null) {
   }
   const L = state.lang;
   const tot = s.kids.reduce((a, k) => ({ n: a.n + k.answers, c: a.c + k.correct, q: a.q + k.quizzes }), { n: 0, c: 0, q: 0 });
+  const cell = (c, n) => (n ? `<b style="color:${barColor(c / n)}">${pct(c, n)} %</b> <span class="muted small">(${n})</span>` : '–');
   const weakest = (topics) => { const x = (topics || []).filter((y) => y.n >= 3).sort((a, b) => a.c / a.n - b.c / b.n)[0]; return x ? `${TOPICS[x.topic]?.icon || ''} ${TOPICS[x.topic]?.[L] || esc(x.topic)} (${pct(x.c, x.n)} %)` : '–'; };
   h(`<h1>👩‍🏫 ${t('stats')}</h1>
     <div class="row"><b>${t('period')}:</b><div class="chips" id="per">${[7, 30, 90].map((d) => `<button class="chip ${d === days ? 'on' : ''}" data-d="${d}">${t('daysN', d)}</button>`).join('')}</div></div>
@@ -408,10 +436,10 @@ async function showTeacher(days = 30, msg = null) {
       <div class="kpi"><span class="v">${pct(tot.c, tot.n)} %</span><span class="l">${t('accuracy')}</span></div>
     </div>
     <div class="card section" style="overflow-x:auto"><h3>${t('students')}</h3><table class="list">
-      <tr><th>${t('student')}</th><th>${t('totalQuizzes')}</th><th>${t('totalAnswers')}</th><th>${t('accuracy')}</th><th>${t('weakest')}</th><th>${t('lastActive')}</th></tr>
-      ${s.kids.map((k) => `<tr><td><b>${esc(k.name)}</b></td><td>${k.quizzes}</td><td>${k.answers}</td><td><b style="color:${barColor(k.correct / Math.max(1, k.answers))}">${pct(k.correct, k.answers)} %</b></td><td>${weakest(k.topics)}</td><td>${k.last ? fmtDate(k.last) : '–'}</td></tr>`).join('')}
+      <tr><th>${t('student')}</th><th>${t('totalQuizzes')}</th><th>${t('totalAnswers')}</th><th>${SUBJECTS.math.icon} ${SUBJECTS.math[L]}</th><th>${SUBJECTS.science.icon} ${SUBJECTS.science[L]}</th><th>${t('weakest')}</th><th>${t('lastActive')}</th></tr>
+      ${s.kids.map((k) => `<tr><td><b>${esc(k.name)}</b></td><td>${k.quizzes}</td><td>${k.answers}</td><td>${cell(k.math_c, k.math_n)}</td><td>${cell(k.sci_c, k.sci_n)}</td><td>${weakest(k.topics)}</td><td>${k.last ? fmtDate(k.last) : '–'}</td></tr>`).join('')}
     </table></div>
-    <div class="card section"><h3>${t('byTopic')}</h3><div class="bars">${topicBars(s.topics)}</div></div>
+    ${subjectTopicCards(s.topics)}
     <div class="card section"><h3>${t('last14')}</h3>${dayBars(s.days, s.today)}</div>`
     : `<div class="card section">${t('noStudents')}</div>`}
     <div class="card section"><h3>🔑 ${t('resetTitle')}</h3>

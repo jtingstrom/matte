@@ -1,6 +1,12 @@
 // Uppgiftsgeneratorer i olympiadstil för åk 4–7.
 // Varje generator skapar en ny variant med slumpade tal. Svaret räknas fram i koden.
 
+export const SUBJECTS = {
+  math: { sv: 'Matte', en: 'Maths', icon: '🧮', color: 'var(--blue)' },
+  science: { sv: 'NO', en: 'Science', icon: '🔬', color: 'var(--green)' },
+};
+
+// Områden. Matteområden har subject 'math', NO-områden läggs till i science.js.
 export const TOPICS = {
   arithmetic: { sv: 'Räkning', en: 'Arithmetic', icon: '🔢' },
   logic: { sv: 'Logik', en: 'Logic', icon: '🧩' },
@@ -35,8 +41,8 @@ export function rng(seed) {
   };
 }
 
-const L = (sv, en) => ({ sv, en });
-const N = (n) => (n < 0 ? '−' + -n : String(n));
+export const L = (sv, en) => ({ sv, en });
+export const N = (n) => (n < 0 ? '−' + -n : String(n));
 const P = (n) => (n < 0 ? `(${N(n)})` : N(n)); // negativa tal inom parentes
 const gcd = (a, b) => { a = Math.abs(a); b = Math.abs(b); while (b) [a, b] = [b, a % b]; return a; };
 const lcm = (a, b) => (a * b) / gcd(a, b);
@@ -50,10 +56,11 @@ const WEEKDAYS = [
   L('måndag', 'Monday'), L('tisdag', 'Tuesday'), L('onsdag', 'Wednesday'), L('torsdag', 'Thursday'),
   L('fredag', 'Friday'), L('lördag', 'Saturday'), L('söndag', 'Sunday'),
 ];
-const COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#8b5cf6'];
+export const COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#8b5cf6'];
 
 export const GENERATORS = [];
-function def(id, topic, grades, make) { GENERATORS.push({ id, topic, grades, make }); }
+export function define(id, topic, grades, make, subject = 'math') { GENERATORS.push({ id, topic, grades, make, subject }); }
+const def = (id, topic, grades, make) => define(id, topic, grades, make, 'math');
 
 // Bygger fyra unika svarsalternativ. Värden kan vara tal, strängar eller {sv,en}.
 const keyOf = (v) => (typeof v === 'object' ? v.sv : typeof v === 'number' ? N(v) : String(v));
@@ -898,23 +905,23 @@ def('pagedigits', 'logic', [6, 7], (r) => {
 });
 
 // ---------- publikt API ----------
-export function generatorsFor(grade, topic) {
-  return GENERATORS.filter((gn) => gn.grades.includes(grade) && (!topic || gn.topic === topic));
+export function generatorsFor(grade, topic, subject = 'math') {
+  return GENERATORS.filter((gn) => gn.subject === subject && gn.grades.includes(grade) && (!topic || gn.topic === topic));
 }
 
-export function topicsFor(grade) {
-  return [...new Set(generatorsFor(grade).map((gn) => gn.topic))];
+export function topicsFor(grade, subject = 'math') {
+  return [...new Set(generatorsFor(grade, null, subject).map((gn) => gn.topic))];
 }
 
 export function makeQuestion(gen, grade, r = rng()) {
   const raw = gen.make(r, grade);
   const { options, correct } = buildOptions(r, raw.ans, raw.wrong || []);
-  return { genId: gen.id, topic: gen.topic, grade, q: raw.q, visual: raw.visual || '', options, correct, unit: raw.unit || null, ex: raw.ex };
+  return { genId: gen.id, topic: gen.topic, subject: gen.subject, grade, q: raw.q, visual: raw.visual || '', options, correct, unit: raw.unit || null, ex: raw.ex };
 }
 
 // Skapar ett quiz. weights: { genId: vikt } för att träna mer på svåra uppgifter.
-export function makeQuiz(grade, { count = 10, topic = null, weights = null, r = rng() } = {}) {
-  const pool = generatorsFor(grade, topic);
+export function makeQuiz(grade, { count = 10, topic = null, weights = null, subject = 'math', r = rng() } = {}) {
+  const pool = generatorsFor(grade, topic, subject);
   const chosen = [];
   let bag = [];
   while (chosen.length < count && pool.length) {
